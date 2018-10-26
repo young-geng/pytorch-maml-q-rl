@@ -66,3 +66,20 @@ register(
     entry_point='maml_rl.envs.navigation:Navigation2DEnv',
     max_episode_steps=100
 )
+
+
+# Lunar lander
+register(
+    'LunarLanderMultitask-v0',
+    entry_point='maml_rl.envs.lunar_lander_multitask:LunarLanderMultitask',
+    max_episode_steps=1000,
+    reward_threshold=200
+)
+
+# Lunar lander
+register(
+    'CartPoleMultitask-v0',
+    entry_point='maml_rl.envs.cartpole_multitask:CartPoleMultitask',
+    max_episode_steps=500,
+    reward_threshold=475.0
+)

@@ -26,7 +26,7 @@ class CategoricalMLPPolicy(Policy):
                 nn.Linear(layer_sizes[i - 1], layer_sizes[i]))
         self.apply(weight_init)
 
-    def forward(self, input, params=None):
+    def forward_logits(self, input, params=None):
         if params is None:
             params = OrderedDict(self.named_parameters())
         output = input
@@ -39,4 +39,7 @@ class CategoricalMLPPolicy(Policy):
             weight=params['layer{0}.weight'.format(self.num_layers)],
             bias=params['layer{0}.bias'.format(self.num_layers)])
 
-        return Categorical(logits=logits)
+        return logits
+        
+    def forward(self, input, params=None):
+        return Categorical(logits=self.forward_logits(input, params))

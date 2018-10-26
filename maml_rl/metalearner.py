@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch.nn.utils.convert_parameters import (vector_to_parameters,
                                                parameters_to_vector)
 from torch.distributions.kl import kl_divergence
@@ -6,6 +7,8 @@ from torch.distributions.kl import kl_divergence
 from maml_rl.utils.torch_utils import (weighted_mean, detach_distribution,
                                        weighted_normalize)
 from maml_rl.utils.optimization import conjugate_gradient
+from maml_rl.policies import CategoricalMLPPolicy
+
 
 class MetaLearner(object):
     """Meta-learner
@@ -27,16 +30,29 @@ class MetaLearner(object):
         (https://arxiv.org/abs/1502.05477)
     """
     def __init__(self, sampler, policy, baseline, gamma=0.95,
-                 fast_lr=0.5, tau=1.0, device='cpu'):
+                 fast_lr=0.5, tau=1.0, q_inner=False, q_residuce_gradient=False,
+                 q_soft=False, q_soft_temp=1.0, device='cpu'):
         self.sampler = sampler
         self.policy = policy
         self.baseline = baseline
         self.gamma = gamma
         self.fast_lr = fast_lr
         self.tau = tau
+        
+        self.q_inner = q_inner
+        self.q_residuce_gradient = q_residuce_gradient
+        self.q_soft = q_soft
+        self.q_soft_temp = q_soft_temp
+        
         self.to(device)
-
+        
     def inner_loss(self, episodes, params=None):
+        if self.q_inner:
+            return self.inner_q_loss(episodes, params)
+        else:
+            return self.inner_pg_loss(episodes, params)
+
+    def inner_pg_loss(self, episodes, params=None):
         """Compute the inner loss for the one-step gradient update. The inner 
         loss is REINFORCE with baseline [2], computed on advantages estimated 
         with Generalized Advantage Estimation (GAE, [3]).
@@ -51,6 +67,42 @@ class MetaLearner(object):
             log_probs = torch.sum(log_probs, dim=2)
         loss = -weighted_mean(log_probs * advantages, weights=episodes.mask)
 
+        return loss
+        
+    def inner_q_loss(self, episodes, params=None):
+        assert isinstance(self.policy, CategoricalMLPPolicy)
+        
+        observations, actions, rewards, next_observations, dones = (
+            episodes.flattened_transitions
+        )
+        current_q_values = self.policy.forward_logits(observations, params)
+        current_action_q_values = current_q_values[
+            torch.arange(current_q_values.shape[0]), actions
+        ]
+        
+        next_q_values = self.policy.forward_logits(next_observations, params)
+        
+        if self.q_soft:
+            def logsumexp(inputs, dim=None, keepdim=False):
+                return (
+                    (inputs - F.log_softmax(inputs)).mean(dim, keepdim=keepdim)
+                )
+            
+            next_max_q_values = self.q_soft_temp * logsumexp(
+                next_q_values / soft_q_temperature, 1
+            )
+            
+        else:
+            next_max_q_values, _ = torch.max(next_q_values, dim=1)
+        
+        if not self.q_residuce_gradient:
+            next_max_q_values = next_max_q_values.detach()
+            
+        
+        target_values = rewards + self.gamma * (1.0 - dones) * next_max_q_values
+        
+        loss = 0.5 * torch.mean((current_action_q_values - target_values) ** 2)
+        
         return loss
 
     def adapt(self, episodes, first_order=False):

@@ -18,13 +18,65 @@ class BatchEpisodes(object):
         self._rewards = None
         self._returns = None
         self._mask = None
+        
+        self._flattened_transitions = None
+        
+    @property
+    def flattened_transitions(self):
+        if self._flattened_transitions is None:
+            observations = []
+            next_observations = []
+            actions = []
+            dones = []
+            rewards = []
+            
+            for i in range(self.batch_size):
+                observations.append(np.stack(self._observations_list[i], axis=0))
+                next_observations.append(
+                    np.stack(
+                        (self._observations_list[i][1:]
+                         + [self._observations_list[i][0] * 0.0]),
+                        axis=0
+                    )
+                )
+                actions.append(
+                    np.stack(self._actions_list[i], axis=0).astype(np.int64)
+                )
+                done = np.zeros(len(self._actions_list[i])).astype(np.float32)
+                done[-1] = 1.0
+                dones.append(done)
+                rewards.append(self._rewards_list[i])
+                
+            observations = torch.from_numpy(
+                np.concatenate(observations, axis=0)
+            ).to(self.device)
+            next_observations=  torch.from_numpy(
+                np.concatenate(next_observations, axis=0)
+            ).to(self.device)
+            actions = torch.from_numpy(
+                np.concatenate(actions, axis=0)
+            ).to(self.device)
+            dones = torch.from_numpy(
+                np.concatenate(dones, axis=0)
+            ).to(self.device)
+            rewards = torch.from_numpy(
+                np.concatenate(rewards, axis=0)
+            ).to(self.device)
+            
+            self._flattened_transitions = (
+                observations, actions, rewards, next_observations, dones 
+            )
+            
+        return self._flattened_transitions
 
     @property
     def observations(self):
         if self._observations is None:
             observation_shape = self._observations_list[0][0].shape
-            observations = np.zeros((len(self), self.batch_size)
-                + observation_shape, dtype=np.float32)
+            observations = np.zeros(
+                (len(self), self.batch_size) + observation_shape,
+                dtype=np.float32
+            )
             for i in range(self.batch_size):
                 length = len(self._observations_list[i])
                 observations[:length, i] = np.stack(self._observations_list[i], axis=0)

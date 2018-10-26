@@ -45,8 +45,15 @@ def main(args):
     baseline = LinearFeatureBaseline(
         int(np.prod(sampler.envs.observation_space.shape)))
 
-    metalearner = MetaLearner(sampler, policy, baseline, gamma=args.gamma,
-        fast_lr=args.fast_lr, tau=args.tau, device=args.device)
+    metalearner = MetaLearner(
+        sampler, policy, baseline, gamma=args.gamma,
+        fast_lr=args.fast_lr, tau=args.tau,
+        q_inner=args.inner_q,
+        q_residuce_gradient=args.inner_q_residue_gradient,
+        q_soft=args.inner_q_soft,
+        q_soft_temp=args.inner_q_soft_temp,
+        device=args.device,
+    )
 
     for batch in range(args.num_batches):
         tasks = sampler.sample_tasks(num_tasks=args.meta_batch_size)
@@ -84,6 +91,20 @@ if __name__ == '__main__':
         help='value of the discount factor for GAE')
     parser.add_argument('--first-order', action='store_true',
         help='use the first-order approximation of MAML')
+        
+    
+    parser.add_argument('--inner_q', action='store_true',
+        help='use q learning loss for inner loop')
+    
+    parser.add_argument('--inner_q_residue_gradient', action='store_true',
+        help='use residue gradient for inner loop q loss')
+        
+    parser.add_argument('--inner_q_soft', action='store_true',
+        help='use soft q learning for inner loop')
+        
+    parser.add_argument('--inner_q_soft_temp', type=float, default=1.0,
+        help='value of the soft q learning temperature for inner loop')
+        
 
     # Policy network (relu activation function)
     parser.add_argument('--hidden-size', type=int, default=100,
