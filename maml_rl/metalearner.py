@@ -1,3 +1,7 @@
+import numpy as np
+
+from attrdict import AttrDict
+
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.convert_parameters import (vector_to_parameters,
@@ -30,14 +34,17 @@ class MetaLearner(object):
         (https://arxiv.org/abs/1502.05477)
     """
     def __init__(self, sampler, policy, baseline, gamma=0.95,
-                 fast_lr=0.5, tau=1.0, q_inner=False, q_residuce_gradient=False,
-                 q_soft=False, q_soft_temp=1.0, device='cpu'):
+                 fast_lr=0.5, tau=1.0, inner_steps=1, q_inner=False,
+                 q_residuce_gradient=False, q_soft=False, q_soft_temp=1.0,
+                 device='cpu'):
         self.sampler = sampler
         self.policy = policy
         self.baseline = baseline
         self.gamma = gamma
         self.fast_lr = fast_lr
         self.tau = tau
+        
+        self.inner_steps = inner_steps
         
         self.q_inner = q_inner
         self.q_residuce_gradient = q_residuce_gradient
@@ -89,7 +96,7 @@ class MetaLearner(object):
                 )
             
             next_max_q_values = self.q_soft_temp * logsumexp(
-                next_q_values / soft_q_temperature, 1
+                next_q_values / self.q_soft_temp, 1
             )
             
         else:
@@ -111,30 +118,66 @@ class MetaLearner(object):
         """
         # Fit the baseline to the training episodes
         self.baseline.fit(episodes)
-        # Get the loss on the training episodes
-        loss = self.inner_loss(episodes)
-        # Get the new parameters after a one-step gradient update
-        params = self.policy.update_params(loss, step_size=self.fast_lr,
-            first_order=first_order)
+        
+        params = None
+        
+        info = AttrDict()
+        loss = self.inner_loss(episodes, params)
+        
+        info.pre_update_loss = loss.detach().cpu().numpy()
+        
+        for _ in range(self.inner_steps):
+            # Get the new parameters after a one-step gradient update
+            params = self.policy.update_params(
+                loss, step_size=self.fast_lr, first_order=first_order,
+                params=params
+            )
+            
+            # Get the loss on the training episodes
+            loss = self.inner_loss(episodes, params)
+            
+        info.post_update_loss = loss.detach().cpu().numpy()
+        
+        info.weight_change = torch.norm(
+            parameters_to_vector(self.policy.parameters())
+            - parameters_to_vector(params.values())
+        ).detach().cpu().numpy()
 
-        return params
+        return params, info
 
     def sample(self, tasks, first_order=False):
         """Sample trajectories (before and after the update of the parameters) 
         for all the tasks `tasks`.
         """
         episodes = []
+        pre_update_losses = []
+        post_update_losses = []
+        weight_changes = []
+        
         for task in tasks:
             self.sampler.reset_task(task)
             train_episodes = self.sampler.sample(self.policy,
                 gamma=self.gamma, device=self.device)
 
-            params = self.adapt(train_episodes, first_order=first_order)
+            params, adaptation_info = self.adapt(train_episodes, first_order=first_order)
 
             valid_episodes = self.sampler.sample(self.policy, params=params,
                 gamma=self.gamma, device=self.device)
             episodes.append((train_episodes, valid_episodes))
-        return episodes
+            
+            pre_update_losses.append(adaptation_info.pre_update_loss)
+            post_update_losses.append(adaptation_info.post_update_loss)
+            weight_changes.append(adaptation_info.weight_change)
+            
+        info = AttrDict(
+            mean_pre_update_loss=np.mean(pre_update_losses),
+            mean_post_update_loss=np.mean(post_update_losses),
+            mean_weight_change=np.mean(weight_changes)
+        )
+        
+        info.mean_loss_improvment = info.mean_pre_update_loss - info.mean_post_update_loss
+            
+        return episodes, info
 
     def kl_divergence(self, episodes, old_pis=None):
         kls = []
@@ -142,7 +185,7 @@ class MetaLearner(object):
             old_pis = [None] * len(episodes)
 
         for (train_episodes, valid_episodes), old_pi in zip(episodes, old_pis):
-            params = self.adapt(train_episodes)
+            params, _ = self.adapt(train_episodes)
             pi = self.policy(valid_episodes.observations, params=params)
 
             if old_pi is None:
@@ -177,7 +220,7 @@ class MetaLearner(object):
             old_pis = [None] * len(episodes)
 
         for (train_episodes, valid_episodes), old_pi in zip(episodes, old_pis):
-            params = self.adapt(train_episodes)
+            params, _ = self.adapt(train_episodes)
             with torch.set_grad_enabled(old_pi is None):
                 pi = self.policy(valid_episodes.observations, params=params)
                 pis.append(detach_distribution(pi))

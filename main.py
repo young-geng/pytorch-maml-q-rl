@@ -48,25 +48,32 @@ def main(args):
     metalearner = MetaLearner(
         sampler, policy, baseline, gamma=args.gamma,
         fast_lr=args.fast_lr, tau=args.tau,
-        q_inner=args.inner_q,
-        q_residuce_gradient=args.inner_q_residue_gradient,
-        q_soft=args.inner_q_soft,
+        q_inner=args.inner_q == 'true',
+        q_residuce_gradient=args.inner_q_residue_gradient == 'true',
+        q_soft=args.inner_q_soft == 'true',
         q_soft_temp=args.inner_q_soft_temp,
         device=args.device,
     )
 
     for batch in range(args.num_batches):
         tasks = sampler.sample_tasks(num_tasks=args.meta_batch_size)
-        episodes = metalearner.sample(tasks, first_order=args.first_order)
+        episodes, adaptation_info = metalearner.sample(tasks, first_order=args.first_order)
         metalearner.step(episodes, max_kl=args.max_kl, cg_iters=args.cg_iters,
             cg_damping=args.cg_damping, ls_max_steps=args.ls_max_steps,
             ls_backtrack_ratio=args.ls_backtrack_ratio)
 
         # Tensorboard
-        writer.add_scalar('total_rewards/before_update',
-            total_rewards([ep.rewards for ep, _ in episodes]), batch)
-        writer.add_scalar('total_rewards/after_update',
-            total_rewards([ep.rewards for _, ep in episodes]), batch)
+        pre_update_rewards = total_rewards([ep.rewards for ep, _ in episodes])
+        post_update_rewards = total_rewards([ep.rewards for _, ep in episodes])
+        
+        writer.add_scalar('total_rewards/before_update', pre_update_rewards, batch)
+        writer.add_scalar('total_rewards/after_update', post_update_rewards, batch)
+        writer.add_scalar('total_rewards/rewards_improvement', post_update_rewards - pre_update_rewards, batch)
+            
+        writer.add_scalar('adaptation/pre_update_inner_loss', adaptation_info.mean_pre_update_loss, batch)
+        writer.add_scalar('adaptation/post_update_inner_loss', adaptation_info.mean_post_update_loss, batch)
+        writer.add_scalar('adaptation/inner_loss_improvement', adaptation_info.mean_loss_improvment, batch)
+        writer.add_scalar('adaptation/weight_change', adaptation_info.mean_weight_change, batch)
 
         # Save policy network
         with open(os.path.join(save_folder,
@@ -92,17 +99,22 @@ if __name__ == '__main__':
     parser.add_argument('--first-order', action='store_true',
         help='use the first-order approximation of MAML')
         
+    parser.add_argument('--inner-steps', type=int, default=1,
+        help='number of inner loop gradient steps')
+        
     
-    parser.add_argument('--inner_q', action='store_true',
+    parser.add_argument('--inner-q', choices=('true', 'false'), default='false',
         help='use q learning loss for inner loop')
     
-    parser.add_argument('--inner_q_residue_gradient', action='store_true',
+    parser.add_argument('--inner-q-residue-gradient',
+        choices=('true', 'false'), default='false',
         help='use residue gradient for inner loop q loss')
         
-    parser.add_argument('--inner_q_soft', action='store_true',
+    parser.add_argument('--inner-q-soft',
+        choices=('true', 'false'), default='false',
         help='use soft q learning for inner loop')
         
-    parser.add_argument('--inner_q_soft_temp', type=float, default=1.0,
+    parser.add_argument('--inner-q-soft-temp', type=float, default=1.0,
         help='value of the soft q learning temperature for inner loop')
         
 
