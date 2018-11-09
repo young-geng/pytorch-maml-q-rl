@@ -1,3 +1,5 @@
+import random
+
 import maml_rl.envs
 import gym
 import numpy as np
@@ -17,6 +19,11 @@ def total_rewards(episodes_rewards, aggregation=torch.mean):
     return rewards.item()
 
 def main(args):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.manual_seed(args.seed)
+    
     continuous_actions = (args.env_name in ['AntVel-v1', 'AntDir-v1',
         'AntPos-v0', 'HalfCheetahVel-v1', 'HalfCheetahDir-v1',
         '2DNavigation-v0'])
@@ -56,6 +63,8 @@ def main(args):
     )
 
     for batch in range(args.num_batches):
+        if args.device.type == 'cuda':
+            torch.cuda.empty_cache()
         tasks = sampler.sample_tasks(num_tasks=args.meta_batch_size)
         episodes, adaptation_info = metalearner.sample(tasks, first_order=args.first_order)
         metalearner.step(episodes, max_kl=args.max_kl, cg_iters=args.cg_iters,
@@ -90,6 +99,8 @@ if __name__ == '__main__':
         'Model-Agnostic Meta-Learning (MAML)')
 
     # General
+    parser.add_argument('--seed', type=int, default=42,
+        help='random seed')
     parser.add_argument('--env-name', type=str,
         help='name of the environment')
     parser.add_argument('--gamma', type=float, default=0.95,
